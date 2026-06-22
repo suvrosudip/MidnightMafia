@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Room } from "colyseus.js";
 import { QRCodeSVG } from "qrcode.react";
-import { createDisplay, joinByCode, reconnect, snapshot, Snap, PlayerSnap } from "./net";
+import { createDisplay, joinByCode, reconnect, snapshot, Snap, PlayerSnap, Settings } from "./net";
 import { speak, stopSpeaking } from "./speech";
+import { musicStart, musicStop, musicMood, isMusicOn } from "./music";
 import Atmosphere from "./Atmosphere";
 import { Crest } from "./Crest";
 import { RoleArt } from "./RoleArt";
 
 type Mode = "home" | "display" | "player";
-type You = { role: string; roleName: string; blurb: string; partners?: string[]; investigation?: string };
+type You = { role: string; roleName: string; blurb: string; partners?: string[]; investigation?: string; canHealSelf?: boolean; shots?: number };
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("home");
@@ -20,6 +21,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [choice, setChoice] = useState<string | null>(null);
   const [voiceOn, setVoiceOn] = useState(true);
+  const [musicOn, setMusicOn] = useState(false);
 
   const roomRef = useRef<Room | null>(null);
   const lastSpoken = useRef("");
@@ -90,6 +92,11 @@ export default function App() {
     }
   }, [snap, mode, voiceOn]);
 
+  // ambient music follows the phase (display only)
+  useEffect(() => {
+    if (mode === "display" && snap && isMusicOn()) musicMood(snap.phase);
+  }, [snap?.phase, mode]);
+
   // ---- actions ----
   async function openDisplay() {
     try { const room = await createDisplay(); attach(room, true); setMode("display"); }
@@ -104,12 +111,17 @@ export default function App() {
   function leave() {
     try { localStorage.removeItem("mm"); } catch {}
     stopSpeaking();
+    musicStop(); setMusicOn(false);
     roomRef.current?.leave(true);
     roomRef.current = null;
     setSnap(null); setYou(null); setMode("home"); setError(""); setChoice(null);
   }
   function toggleVoice() {
     setVoiceOn((v) => { if (v) stopSpeaking(); else lastSpoken.current = ""; return !v; });
+  }
+  function toggleMusic() {
+    if (musicOn) { musicStop(); setMusicOn(false); }
+    else { musicStart(); musicMood(snap?.phase || "lobby"); setMusicOn(true); }
   }
 
   const me: PlayerSnap | undefined = snap?.players.find((p) => p.id === sid);
@@ -171,11 +183,13 @@ export default function App() {
             <div className="lbl mt">or open {window.location.host} and enter code</div>
             <div className="bigcode">{snap.code}</div>
             <Roster players={snap.players} />
+            <LobbySettings snap={snap} send={send} canEdit={true} />
             <div className="bar center">
-              <button className="btn solid" disabled={snap.players.length < 4} onClick={() => send("start")}>Start game</button>
+              <button className="btn solid" disabled={snap.players.length < snap.settings.minPlayers} onClick={() => send("start")}>Start game</button>
               <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button>
+              <button className="btn ghost" onClick={toggleMusic}>♪ Music {musicOn ? "on" : "off"}</button>
             </div>
-            <div className="muted small">{snap.players.length} / 4 players minimum · ★ = admin</div>
+            <div className="muted small">{snap.players.length} / {snap.settings.minPlayers} players minimum · ★ = admin</div>
           </div>
         ) : (
           <>
@@ -191,7 +205,8 @@ export default function App() {
               <>
                 <Reveal snap={snap} />
                 <div className="bar"><button className="btn solid" onClick={() => send("reset")}>New game</button>
-                  <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button></div>
+                  <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button>
+                  <button className="btn ghost" onClick={toggleMusic}>♪ Music {musicOn ? "on" : "off"}</button></div>
               </>
             ) : (
               <div className="bar">
@@ -200,6 +215,7 @@ export default function App() {
                   : <button className="btn ghost" onClick={() => send("force")}>⏭ Skip ahead</button>}
                 <button className="btn ghost" onClick={() => speak(snap.narration)}>🔁 Replay</button>
                 <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button>
+                <button className="btn ghost" onClick={toggleMusic}>♪ Music {musicOn ? "on" : "off"}</button>
               </div>
             )}
           </>
@@ -218,9 +234,10 @@ export default function App() {
         <div className="card">
           <div className="muted">You’re in <b style={{ color: "var(--candle)" }}>{snap.code}</b> as <b style={{ color: "var(--candle)" }}>{me.name}</b>{me.isAdmin ? " (admin ★)" : ""}.</div>
           <Chips players={snap.players} sid={sid} />
+          <LobbySettings snap={snap} send={send} canEdit={me.isAdmin} />
           {me.isAdmin
-            ? <><button className="btn solid full mt" disabled={snap.players.length < 4} onClick={() => send("start")}>Start game</button>
-                <div className="muted small mt">You’re the admin · {snap.players.length} / 4 minimum</div></>
+            ? <><button className="btn solid full mt" disabled={snap.players.length < snap.settings.minPlayers} onClick={() => send("start")}>Start game</button>
+                <div className="muted small mt">You’re the admin · {snap.players.length} / {snap.settings.minPlayers} minimum</div></>
             : <div className="muted mt">Waiting for the admin to start… ({snap.players.length} here)</div>}
         </div>
       ) : (
@@ -244,9 +261,18 @@ export default function App() {
           )}
 
           {snap.phase === "night" && me.alive && you && (
-            you.role === "mafia" ? <Picker title="Choose tonight’s target." options={aliveOthers} locked={me.hasActed} choice={choice} setChoice={setChoice} onSubmit={() => send("night-action", { targetId: choice })} />
-            : you.role === "doctor" ? <Picker title="Choose who to protect — you may pick yourself." options={alive} locked={me.hasActed} choice={choice} setChoice={setChoice} onSubmit={() => send("night-action", { targetId: choice })} />
-            : you.role === "detective" ? <Picker title="Choose who to investigate." options={aliveOthers} locked={me.hasActed} choice={choice} setChoice={setChoice} onSubmit={() => send("night-action", { targetId: choice })} />
+            (you.role === "mafia" || you.role === "godfather")
+              ? <Picker title="Choose tonight’s victim." options={aliveOthers} locked={me.hasActed} choice={choice} setChoice={setChoice} onSubmit={() => send("night-action", { targetId: choice })} />
+            : you.role === "doctor"
+              ? <Picker title={you.canHealSelf ? "Choose who to protect — you may pick yourself." : "Choose who to protect. (You can’t heal yourself two nights running.)"} options={you.canHealSelf ? alive : aliveOthers} locked={me.hasActed} choice={choice} setChoice={setChoice} onSubmit={() => send("night-action", { targetId: choice })} />
+            : you.role === "detective"
+              ? <Picker title="Choose who to investigate." options={aliveOthers} locked={me.hasActed} choice={choice} setChoice={setChoice} onSubmit={() => send("night-action", { targetId: choice })} />
+            : you.role === "vigilante"
+              ? ((you.shots ?? 0) > 0
+                  ? <Picker title={`Take a shot? You have ${you.shots} bullet${you.shots === 1 ? "" : "s"} left.`} options={aliveOthers} locked={me.hasActed} choice={choice} setChoice={setChoice} onSubmit={() => send("night-action", { targetId: choice })} extraAction={{ label: "Hold fire", onClick: () => send("night-action", { targetId: "skip" }) }} />
+                  : <div className="card muted">🔫 Your pistol is spent. Rest, and watch the others.</div>)
+            : you.role === "jester"
+              ? <div className="card muted">🃏 You scheme in the dark. Your aim: get the town to vote <b>you</b> out by day.</div>
             : <div className="card muted">😴 You sleep soundly. Watch the screen for the dawn.</div>
           )}
 
@@ -256,7 +282,7 @@ export default function App() {
 
           {(snap.phase === "night_result" || snap.phase === "day_result") && <div className="card muted">Look to the big screen…</div>}
           {!me.alive && snap.phase !== "ended" && <div className="card muted">👻 You’ve been eliminated. Watch quietly.</div>}
-          {snap.phase === "ended" && <div className="card muted">{snap.winner === "mafia" ? "Mafia win." : "Town wins."} The big screen has the full reveal.</div>}
+          {snap.phase === "ended" && <div className="card muted">{winnerTitle(snap.winner)}. The big screen has the full reveal.</div>}
 
           {me.isAdmin && (
             <div className="bar mt">
@@ -308,8 +334,8 @@ function Chips({ players, sid }: { players: PlayerSnap[]; sid: string }) {
     <span key={p.id} className={"chip" + (p.id === sid ? " me" : "")}>{p.name} {p.isAdmin ? "★" : ""}</span>
   ))}</div>;
 }
-function Picker({ title, options, locked, choice, setChoice, onSubmit }:
-  { title: string; options: PlayerSnap[]; locked: boolean; choice: string | null; setChoice: (s: string) => void; onSubmit: () => void }) {
+function Picker({ title, options, locked, choice, setChoice, onSubmit, extraAction }:
+  { title: string; options: PlayerSnap[]; locked: boolean; choice: string | null; setChoice: (s: string) => void; onSubmit: () => void; extraAction?: { label: string; onClick: () => void } }) {
   return (
     <div className="card">
       <div className="prompt">{title}</div>
@@ -318,15 +344,17 @@ function Picker({ title, options, locked, choice, setChoice, onSubmit }:
       ))}</div>
       {locked
         ? <div className="locked">Locked in. Waiting for the others…</div>
-        : <button className="btn solid full" disabled={!choice} onClick={onSubmit}>Lock it in</button>}
+        : extraAction
+          ? <div className="bar"><button className="btn solid" disabled={!choice} onClick={onSubmit}>Lock it in</button><button className="btn ghost" onClick={extraAction.onClick}>{extraAction.label}</button></div>
+          : <button className="btn solid full" disabled={!choice} onClick={onSubmit}>Lock it in</button>}
     </div>
   );
 }
 function Reveal({ snap }: { snap: Snap }) {
   return (
-    <div className="card result" style={{ borderColor: snap.winner === "mafia" ? "var(--maf)" : "var(--candle)" }}>
-      <div className="resulttitle" style={{ color: snap.winner === "mafia" ? "var(--maf)" : "var(--candle)" }}>
-        {snap.winner === "mafia" ? "Mafia win" : "Town wins"}</div>
+    <div className="card result" style={{ borderColor: winnerColor(snap.winner) }}>
+      <div className="resulttitle" style={{ color: winnerColor(snap.winner) }}>
+        {winnerTitle(snap.winner)}</div>
       {snap.players.map((p) => (
         <div key={p.id} className="resultrow">
           <span className={p.alive ? "" : "dead"}>{p.name}</span>
@@ -336,10 +364,96 @@ function Reveal({ snap }: { snap: Snap }) {
     </div>
   );
 }
+function LobbySettings({ snap, send, canEdit }: { snap: Snap; send: (t: string, p?: any) => void; canEdit: boolean }) {
+  const s = snap.settings;
+  const n = snap.players.length;
+  const set = (patch: any) => send("settings", patch);
+  if (!canEdit) {
+    return (
+      <div className="setsummary">
+        Lineup for <b>{n}</b> player{n === 1 ? "" : "s"}: <b>{lineup(n, s)}</b>.
+        <div className="mt">Doctor self-heal: <b>{selfHealLabel(s.selfHeal)}</b>.</div>
+      </div>
+    );
+  }
+  const Toggle = ({ k, label }: { k: keyof Settings; label: string }) => (
+    <button className={"toggle" + ((s as any)[k] ? " on" : "")} onClick={() => set({ [k]: !(s as any)[k] })}>
+      <span className="dot" />{label}
+    </button>
+  );
+  return (
+    <div className="settings">
+      <div className="setlabel">Roles in play</div>
+      <div className="togglerow">
+        <Toggle k="detective" label="Detective" />
+        <Toggle k="doctor" label="Doctor" />
+        <Toggle k="vigilante" label="Vigilante" />
+        <Toggle k="godfather" label="Godfather" />
+        <Toggle k="jester" label="Jester" />
+      </div>
+
+      <div className="setlabel">Mafia count</div>
+      <div className="seg">
+        <button className={"segbtn" + (s.mafiaMode === "auto" ? " on" : "")} onClick={() => set({ mafiaMode: "auto" })}>Auto (scales)</button>
+        <button className={"segbtn" + (s.mafiaMode === "fixed" ? " on" : "")} onClick={() => set({ mafiaMode: "fixed" })}>Fixed</button>
+        {s.mafiaMode === "fixed" && (
+          <span className="stepper">
+            <button onClick={() => set({ mafiaCount: Math.max(1, s.mafiaCount - 1) })}>−</button>
+            <span className="num">{s.mafiaCount}</span>
+            <button onClick={() => set({ mafiaCount: Math.min(5, s.mafiaCount + 1) })}>+</button>
+          </span>
+        )}
+      </div>
+
+      <div className="setlabel">Doctor self-heal</div>
+      <div className="seg">
+        {([["never", "Never"], ["once", "Once"], ["alternate", "Every other night"], ["always", "Always"]] as const).map(([v, l]) => (
+          <button key={v} className={"segbtn" + (s.selfHeal === v ? " on" : "")} onClick={() => set({ selfHeal: v })}>{l}</button>
+        ))}
+      </div>
+
+      <div className="lineup">
+        <div className="ltitle">With {n} player{n === 1 ? "" : "s"}, tonight deals</div>
+        <div className="lbody">{n < s.minPlayers ? `Need ${s.minPlayers - n} more player${s.minPlayers - n === 1 ? "" : "s"} to begin.` : lineup(n, s)}</div>
+      </div>
+    </div>
+  );
+}
 function phaseLabel(p: string) {
   return p === "night" ? "Night" : p === "night_result" ? "Dawn" : p === "day" ? "Day" : p === "day_result" ? "Verdict" : "";
 }
 function roleColor(roleName: string) {
-  return roleName === "Mafia" ? "var(--maf)" : roleName === "Doctor" ? "var(--doc)"
-    : roleName === "Detective" ? "var(--det)" : "var(--vil)";
+  switch (roleName) {
+    case "Mafia": return "var(--maf)";
+    case "Godfather": return "var(--gf)";
+    case "Doctor": return "var(--doc)";
+    case "Detective": return "var(--det)";
+    case "Vigilante": return "var(--vig)";
+    case "Jester": return "var(--jester)";
+    default: return "var(--vil)";
+  }
+}
+function winnerColor(w: string) { return w === "mafia" ? "var(--maf)" : w === "jester" ? "var(--jester)" : "var(--candle)"; }
+function winnerTitle(w: string) { return w === "mafia" ? "Mafia win" : w === "jester" ? "The Jester wins" : "Town wins"; }
+function selfHealLabel(v: string) { return v === "never" ? "Never" : v === "once" ? "Once per game" : v === "always" ? "Always" : "Every other night"; }
+function lineup(n: number, s: Settings): string {
+  let maf = s.mafiaMode === "fixed" ? s.mafiaCount : (n >= 10 ? 3 : n >= 7 ? 2 : 1);
+  maf = Math.max(1, Math.min(maf, Math.max(1, Math.floor((n - 1) / 2))));
+  const pool: string[] = [];
+  for (let i = 0; i < maf; i++) pool.push("mafia");
+  if (s.godfather && pool.length) pool[0] = "godfather";
+  const add = (r: string) => { if (pool.length < n) pool.push(r); };
+  if (s.detective) add("detective");
+  if (s.doctor) add("doctor");
+  if (s.vigilante && n >= 6) add("vigilante");
+  if (s.jester && n >= 6) add("jester");
+  while (pool.length < n) pool.push("villager");
+  const order = ["godfather", "mafia", "detective", "doctor", "vigilante", "jester", "villager"];
+  const label: Record<string, string> = { godfather: "Godfather", mafia: "Mafia", detective: "Detective", doctor: "Doctor", vigilante: "Vigilante", jester: "Jester", villager: "Villager" };
+  const counts: Record<string, number> = {};
+  pool.slice(0, n).forEach((r) => (counts[r] = (counts[r] || 0) + 1));
+  return order.filter((r) => counts[r]).map((r) => {
+    const c = counts[r];
+    return c === 1 ? label[r] : `${c} ${r === "villager" ? "Villagers" : label[r]}`;
+  }).join(" · ");
 }
