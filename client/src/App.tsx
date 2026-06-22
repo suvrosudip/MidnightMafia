@@ -3,7 +3,6 @@ import { Room } from "colyseus.js";
 import { QRCodeSVG } from "qrcode.react";
 import { createDisplay, joinByCode, reconnect, snapshot, Snap, PlayerSnap, Settings } from "./net";
 import { speak, stopSpeaking } from "./speech";
-import { musicStart, musicStop, musicMood, isMusicOn } from "./music";
 import Atmosphere from "./Atmosphere";
 import { Crest } from "./Crest";
 import { RoleArt } from "./RoleArt";
@@ -21,7 +20,6 @@ export default function App() {
   const [error, setError] = useState("");
   const [choice, setChoice] = useState<string | null>(null);
   const [voiceOn, setVoiceOn] = useState(true);
-  const [musicOn, setMusicOn] = useState(false);
 
   const roomRef = useRef<Room | null>(null);
   const lastSpoken = useRef("");
@@ -92,11 +90,6 @@ export default function App() {
     }
   }, [snap, mode, voiceOn]);
 
-  // ambient music follows the phase (display only)
-  useEffect(() => {
-    if (mode === "display" && snap && isMusicOn()) musicMood(snap.phase);
-  }, [snap?.phase, mode]);
-
   // ---- actions ----
   async function openDisplay() {
     try { const room = await createDisplay(); attach(room, true); setMode("display"); }
@@ -111,7 +104,6 @@ export default function App() {
   function leave() {
     try { localStorage.removeItem("mm"); } catch {}
     stopSpeaking();
-    musicStop(); setMusicOn(false);
     roomRef.current?.leave(true);
     roomRef.current = null;
     setSnap(null); setYou(null); setMode("home"); setError(""); setChoice(null);
@@ -119,12 +111,7 @@ export default function App() {
   function toggleVoice() {
     setVoiceOn((v) => { if (v) stopSpeaking(); else lastSpoken.current = ""; return !v; });
   }
-  function toggleMusic() {
-    if (musicOn) { musicStop(); setMusicOn(false); }
-    else { musicStart(); musicMood(snap?.phase || "lobby"); setMusicOn(true); }
-  }
   function simulate() {
-    if (!musicOn) { musicStart(); setMusicOn(true); } // the tap is a valid gesture to start audio
     send("simulate", { count: 7 });
   }
 
@@ -191,7 +178,6 @@ export default function App() {
             <div className="bar center">
               <button className="btn solid" disabled={snap.players.length < snap.settings.minPlayers} onClick={() => send("start")}>Start game</button>
               <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button>
-              <button className="btn ghost" onClick={toggleMusic}>♪ Music {musicOn ? "on" : "off"}</button>
             </div>
             <div className="bar center">
               <button className="btn ghost" onClick={simulate}>▶ Simulate a game</button>
@@ -214,8 +200,7 @@ export default function App() {
               <>
                 <Reveal snap={snap} />
                 <div className="bar"><button className="btn solid" onClick={() => send("reset")}>New game</button>
-                  <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button>
-                  <button className="btn ghost" onClick={toggleMusic}>♪ Music {musicOn ? "on" : "off"}</button></div>
+                  <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button></div>
               </>
             ) : (
               <div className="bar">
@@ -224,7 +209,6 @@ export default function App() {
                   : <button className="btn ghost" onClick={() => send("force")}>⏭ Skip ahead</button>}
                 <button className="btn ghost" onClick={() => speak(snap.narration)}>🔁 Replay</button>
                 <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button>
-                <button className="btn ghost" onClick={toggleMusic}>♪ Music {musicOn ? "on" : "off"}</button>
                 {snap.simulating && <button className="btn ghost" onClick={() => send("reset")}>■ Stop sim</button>}
               </div>
             )}
