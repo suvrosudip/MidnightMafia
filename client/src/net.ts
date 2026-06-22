@@ -21,7 +21,7 @@ export async function reconnect(token: string): Promise<Room> {
 
 export type PlayerSnap = {
   id: string; name: string; connected: boolean; alive: boolean;
-  isAdmin: boolean; hasActed: boolean; hasVoted: boolean; revealedRole: string;
+  isAdmin: boolean; hasActed: boolean; hasVoted: boolean; revealedRole: string; bot: boolean;
 };
 export type Settings = {
   mafiaMode: string; mafiaCount: number;
@@ -31,6 +31,7 @@ export type Settings = {
 export type Snap = {
   code: string; phase: string; round: number; narration: string; winner: string;
   settings: Settings;
+  simulating: boolean;
   players: PlayerSnap[];
 };
 
@@ -44,7 +45,7 @@ export function snapshot(state: any): Snap {
   state.players?.forEach((p: any, id: string) => {
     players.push({
       id, name: p.name, connected: p.connected, alive: p.alive, isAdmin: p.isAdmin,
-      hasActed: p.hasActed, hasVoted: p.hasVoted, revealedRole: p.revealedRole,
+      hasActed: p.hasActed, hasVoted: p.hasVoted, revealedRole: p.revealedRole, bot: !!p.bot,
     });
   });
   const s = state.settings;
@@ -54,6 +55,6 @@ export function snapshot(state: any): Snap {
   } : { ...DEFAULT_SETTINGS };
   return {
     code: state.code, phase: state.phase, round: state.round,
-    narration: state.narration, winner: state.winner, settings, players,
+    narration: state.narration, winner: state.winner, settings, simulating: !!state.simulating, players,
   };
 }

@@ -170,3 +170,7 @@ body[data-phase="day"] .stars { opacity:.12; }
 .lineup .lbody { font-family:var(--voice); font-size:18px; color:var(--parchment); line-height:1.35; }
 .setsummary { margin-top:12px; font-size:13px; color:var(--sub); }
 .setsummary b { color:var(--parchment); font-weight:600; }
+
+/* ---------------- simulate mode ---------------- */
+.simpill { font-family:var(--display); font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:var(--candle); border:1px solid var(--candle); border-radius:999px; padding:3px 10px; opacity:.85; }
+.botmark { font-family:var(--ui); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--sub); border:1px solid var(--line); border-radius:5px; padding:1px 5px; margin-left:6px; opacity:.7; }

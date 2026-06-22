@@ -19,6 +19,10 @@ const BLURB: Record<Role, string> = {
 };
 const MAFIA_ALIGN = (r: Role | undefined) => r === "mafia" || r === "godfather";
 
+// Pacing for simulate mode (ms) and a pool of atmospheric bot names.
+const SIM = { night: 5000, day: 6000, result: 8000 };
+const BOT_NAMES = ["Vivienne", "Salvatore", "Mirabel", "Orson", "Cleo", "Thaddeus", "Wren", "Ezra", "Isolde", "Cormac", "Delphine", "Hollis", "Bram", "Saoirse", "Lucian", "Ottoline"];
+
 export class MafiaRoom extends Room<MafiaState> {
   maxClients = 32;
 
@@ -31,6 +35,9 @@ export class MafiaRoom extends Room<MafiaState> {
   private selfHealLastRound = new Map<string, number>();
   private selfHealUsed = new Map<string, number>();
   private jesterWon = false;
+  private bots = new Set<string>();
+  private sim = false;
+  private simGen = 0;
 
   onCreate() {
     this.setState(new MafiaState());
@@ -44,6 +51,7 @@ export class MafiaRoom extends Room<MafiaState> {
     this.onMessage("force", (c) => { if (this.canControl(c)) this.forceResolve(); });
     this.onMessage("reset", (c) => { if (this.canControl(c)) this.resetToLobby(); });
     this.onMessage("settings", (c, m) => { if (this.canControl(c) && this.state.phase === "lobby") this.applySettings(m); });
+    this.onMessage("simulate", (c, m) => { if (this.canControl(c) && this.state.phase === "lobby") this.startSimulation(m?.count); });
     this.onMessage("night-action", (c, m) => this.setNightAction(c, m?.targetId));
     this.onMessage("vote", (c, m) => this.setVote(c, m?.targetId));
   }
@@ -203,19 +211,22 @@ export class MafiaRoom extends Room<MafiaState> {
       this.pushPrivate(sid);
     });
     this.narrate("Night falls over the town. Everyone, close your eyes. In the dark, the mafia choose their victim, and those gifted to save or to see make their move. Make your choices now.");
+    this.scheduleSim();
   }
 
-  private setNightAction(c: Client, targetId?: string) {
+  private setNightAction(c: Client, targetId?: string) { this.applyNightAction(c.sessionId, targetId); }
+
+  private applyNightAction(sid: string, targetId?: string) {
     if (this.state.phase !== "night" || !targetId) return;
-    const me = this.state.players.get(c.sessionId);
-    const role = this.roles.get(c.sessionId);
-    if (!me || !me.alive || !role || !this.actsAtNight(c.sessionId)) return;
+    const me = this.state.players.get(sid);
+    const role = this.roles.get(sid);
+    if (!me || !me.alive || !role || !this.actsAtNight(sid)) return;
     if (targetId === "skip" && role !== "vigilante") return;
     if (targetId !== "skip" && !this.state.players.get(targetId)?.alive) return;
-    if (role === "doctor" && targetId === c.sessionId && !this.canHealSelf(c.sessionId)) return;
-    this.nightTargets.set(c.sessionId, targetId);
+    if (role === "doctor" && targetId === sid && !this.canHealSelf(sid)) return;
+    this.nightTargets.set(sid, targetId);
     me.hasActed = true;
-    const done = this.aliveEntries().every(([sid]) => !this.actsAtNight(sid) || this.nightTargets.has(sid));
+    const done = this.aliveEntries().every(([s]) => !this.actsAtNight(s) || this.nightTargets.has(s));
     if (done) this.resolveNight();
   }
 
@@ -276,6 +287,7 @@ export class MafiaRoom extends Room<MafiaState> {
     this.narrate(deaths.length
       ? `Dawn breaks over the town. As everyone awakens, they find ${this.joinNames(deaths)} cold and still. Suspicion hangs heavy in the morning air.`
       : "Dawn breaks, and to everyone's relief, all are still breathing. A life was protected in the night.");
+    this.scheduleSim();
   }
 
   private continue() {
@@ -294,15 +306,18 @@ export class MafiaRoom extends Room<MafiaState> {
     this.votes.clear();
     this.state.players.forEach((p) => (p.hasVoted = false));
     this.narrate("The town square fills with voices. Accuse, defend, and decide. When you are ready, cast your votes — one among you must be sent away.");
+    this.scheduleSim();
   }
 
-  private setVote(c: Client, targetId?: string) {
+  private setVote(c: Client, targetId?: string) { this.applyVote(c.sessionId, targetId); }
+
+  private applyVote(sid: string, targetId?: string) {
     if (this.state.phase !== "day" || !targetId) return;
-    const me = this.state.players.get(c.sessionId);
+    const me = this.state.players.get(sid);
     if (!me || !me.alive || !this.state.players.get(targetId)?.alive) return;
-    this.votes.set(c.sessionId, targetId);
+    this.votes.set(sid, targetId);
     me.hasVoted = true;
-    const done = this.aliveEntries().every(([sid]) => this.votes.has(sid));
+    const done = this.aliveEntries().every(([s]) => this.votes.has(s));
     if (done) this.resolveDay();
   }
 
@@ -322,11 +337,13 @@ export class MafiaRoom extends Room<MafiaState> {
     if (roleKey === "jester") {
       this.jesterWon = true;
       this.narrate(`The town turns on ${name} and casts them out — only to catch a wide, knowing grin spreading across their face. ${name} was the Jester, and this was exactly what they wanted.`);
+      this.scheduleSim();
       return;
     }
     this.narrate(name
       ? `The town has reached a verdict. ${name} is cast out, protesting to the last. ${name} was the ${role}.`
       : "The vote is split, and no one is sent away today. The mafia smile quietly to themselves.");
+    this.scheduleSim();
   }
 
   private checkWinner(): "mafia" | "town" | "" {
@@ -348,12 +365,92 @@ export class MafiaRoom extends Room<MafiaState> {
           : "The Jester wanted nothing but their own undoing — and the town obliged. By that grim design, the Jester alone has won.");
   }
 
+  // ---------------- simulate mode ----------------
+  private startSimulation(count?: number) {
+    if (this.state.phase !== "lobby") return;
+    const target = Math.max(this.state.settings.minPlayers, Math.min(12, count && count > 0 ? count : 7));
+    const names = [...BOT_NAMES];
+    for (let i = names.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [names[i], names[j]] = [names[j], names[i]]; }
+    let bi = 0;
+    while (this.state.players.size < target && bi < names.length) {
+      const id = "bot_" + Math.random().toString(36).slice(2, 9);
+      const p = new PlayerState();
+      p.name = names[bi++]; p.bot = true; p.isAdmin = false;
+      this.state.players.set(id, p);
+      this.bots.add(id);
+    }
+    this.ensureAdmin();
+    this.sim = true;
+    this.state.simulating = true;
+    this.simGen++;
+    this.startGame();
+  }
+
+  private randOf<T>(arr: T[]): T | undefined { return arr.length ? arr[Math.floor(Math.random() * arr.length)] : undefined; }
+
+  private botPickNight(sid: string, role: Role): string | undefined {
+    const alive = this.aliveEntries();
+    const others = alive.filter(([s]) => s !== sid).map(([s]) => s);
+    if (role === "mafia" || role === "godfather") {
+      const targets = alive.filter(([s]) => !MAFIA_ALIGN(this.roles.get(s))).map(([s]) => s);
+      return this.randOf(targets) || this.randOf(others);
+    }
+    if (role === "doctor") {
+      if (this.canHealSelf(sid) && Math.random() < 0.3) return sid;
+      return this.randOf(others) || sid;
+    }
+    if (role === "detective") return this.randOf(others);
+    if (role === "vigilante") {
+      if ((this.vigShots.get(sid) || 0) > 0 && Math.random() < 0.45) return this.randOf(others);
+      return "skip";
+    }
+    return undefined;
+  }
+
+  private botNightActions() {
+    if (this.state.phase !== "night") return;
+    for (const [sid] of this.aliveEntries()) {
+      if (this.state.phase !== "night") break;
+      if (!this.bots.has(sid) || !this.actsAtNight(sid) || this.nightTargets.has(sid)) continue;
+      const t = this.botPickNight(sid, this.roles.get(sid)!);
+      if (t) this.applyNightAction(sid, t);
+    }
+  }
+
+  private botVotes() {
+    if (this.state.phase !== "day") return;
+    const alive = this.aliveEntries().map(([s]) => s);
+    const scapegoat = this.randOf(alive);
+    for (const sid of alive) {
+      if (this.state.phase !== "day") break;
+      if (!this.bots.has(sid) || this.votes.has(sid)) continue;
+      let t = scapegoat;
+      if (t === sid || Math.random() < 0.2) t = this.randOf(alive.filter((x) => x !== sid));
+      if (t) this.applyVote(sid, t);
+    }
+  }
+
+  private scheduleSim() {
+    if (!this.sim) return;
+    const gen = this.simGen;
+    const run = (ms: number, fn: () => void) => this.clock.setTimeout(() => { if (this.sim && gen === this.simGen) fn(); }, ms);
+    const ph = this.state.phase;
+    if (ph === "night") run(SIM.night, () => this.botNightActions());
+    else if (ph === "day") run(SIM.day, () => this.botVotes());
+    else if (ph === "night_result" || ph === "day_result") run(SIM.result, () => { if (this.state.phase === ph) this.continue(); });
+  }
+
   private forceResolve() {
     if (this.state.phase === "night") this.resolveNight();
     else if (this.state.phase === "day") this.resolveDay();
   }
 
   private resetToLobby() {
+    this.simGen++;
+    this.sim = false;
+    this.state.simulating = false;
+    for (const sid of this.bots) { this.state.players.delete(sid); this.roles.delete(sid); this.priv.delete(sid); }
+    this.bots.clear();
     this.state.phase = "lobby";
     this.state.round = 0;
     this.state.winner = "";
@@ -363,5 +460,6 @@ export class MafiaRoom extends Room<MafiaState> {
     this.vigShots.clear(); this.selfHealLastRound.clear(); this.selfHealUsed.clear();
     this.state.players.forEach((p) => { p.alive = true; p.hasActed = false; p.hasVoted = false; p.revealedRole = ""; });
     this.clients.forEach((c) => c.send("you", { role: "", roleName: "", blurb: "" }));
+    this.ensureAdmin();
   }
 }

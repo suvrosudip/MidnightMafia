@@ -123,6 +123,10 @@ export default function App() {
     if (musicOn) { musicStop(); setMusicOn(false); }
     else { musicStart(); musicMood(snap?.phase || "lobby"); setMusicOn(true); }
   }
+  function simulate() {
+    if (!musicOn) { musicStart(); setMusicOn(true); } // the tap is a valid gesture to start audio
+    send("simulate", { count: 7 });
+  }
 
   const me: PlayerSnap | undefined = snap?.players.find((p) => p.id === sid);
   const alive = snap?.players.filter((p) => p.alive) ?? [];
@@ -189,7 +193,11 @@ export default function App() {
               <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button>
               <button className="btn ghost" onClick={toggleMusic}>♪ Music {musicOn ? "on" : "off"}</button>
             </div>
+            <div className="bar center">
+              <button className="btn ghost" onClick={simulate}>▶ Simulate a game</button>
+            </div>
             <div className="muted small">{snap.players.length} / {snap.settings.minPlayers} players minimum · ★ = admin</div>
+            <div className="muted small">No one to play with? <b>Simulate</b> fills the room with bots and plays a full game itself.</div>
           </div>
         ) : (
           <>
@@ -198,6 +206,7 @@ export default function App() {
               <div className="row">
                 <span className={"tag p-" + snap.phase}>{phaseLabel(snap.phase)}</span>
                 <span className="muted small">Round {snap.round} · {alive.length} alive</span>
+                {snap.simulating && <span className="simpill">◆ Simulation</span>}
               </div>
               <Roster players={snap.players} />
             </div>
@@ -216,6 +225,7 @@ export default function App() {
                 <button className="btn ghost" onClick={() => speak(snap.narration)}>🔁 Replay</button>
                 <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button>
                 <button className="btn ghost" onClick={toggleMusic}>♪ Music {musicOn ? "on" : "off"}</button>
+                {snap.simulating && <button className="btn ghost" onClick={() => send("reset")}>■ Stop sim</button>}
               </div>
             )}
           </>
@@ -326,12 +336,12 @@ function Narration({ text }: { text: string }) {
 }
 function Roster({ players }: { players: PlayerSnap[] }) {
   return <div className="roster">{players.map((p) => (
-    <div key={p.id} className={"seat" + (p.alive ? "" : " out")}>{p.name} {p.isAdmin ? "★" : ""}{p.connected ? "" : " ⚪"}</div>
+    <div key={p.id} className={"seat" + (p.alive ? "" : " out")}>{p.name} {p.isAdmin ? "★" : ""}{p.connected ? "" : " ⚪"}{p.bot ? <span className="botmark">bot</span> : null}</div>
   ))}{!players.length && <div className="muted">Waiting for players…</div>}</div>;
 }
 function Chips({ players, sid }: { players: PlayerSnap[]; sid: string }) {
   return <div className="chips mt">{players.map((p) => (
-    <span key={p.id} className={"chip" + (p.id === sid ? " me" : "")}>{p.name} {p.isAdmin ? "★" : ""}</span>
+    <span key={p.id} className={"chip" + (p.id === sid ? " me" : "")}>{p.name} {p.isAdmin ? "★" : ""}{p.bot ? <span className="botmark">bot</span> : null}</span>
   ))}</div>;
 }
 function Picker({ title, options, locked, choice, setChoice, onSubmit, extraAction }:

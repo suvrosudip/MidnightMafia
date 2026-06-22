@@ -9,6 +9,7 @@ export class PlayerState extends Schema {
   @type("boolean") isAdmin = false;
   @type("boolean") hasActed = false;
   @type("boolean") hasVoted = false;
+  @type("boolean") bot = false;
   @type("string") revealedRole = ""; // set only when the game ends
 }
 
@@ -31,6 +32,7 @@ export class MafiaState extends Schema {
   @type("number") round = 0;
   @type("string") narration = "Waiting for players to join…";
   @type("string") winner = ""; // "mafia" | "town" | "jester" | ""
+  @type("boolean") simulating = false;
   @type(Settings) settings = new Settings();
   @type({ map: PlayerState }) players = new MapSchema<PlayerState>();
 }
