@@ -73,15 +73,20 @@ async function synthEleven(text: string): Promise<Buffer> {
 
 app.get("/api/tts", async (req, res) => {
   const text = String(req.query.text || "").slice(0, 800).trim();
-  if (!text) return res.status(400).send("no text");
-  if (!TTS_PROVIDER) return res.status(503).send("tts disabled");
+  if (!text) return res.status(400).type("text/plain").send("no text");
+  if (!TTS_PROVIDER) {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(503).type("text/plain").send("tts disabled (no API key set)");
+  }
 
   const key = crypto.createHash("sha1").update(`${TTS_PROVIDER}|${G_VOICE}|${EL_VOICE}|${text}`).digest("hex");
-  res.setHeader("Content-Type", "audio/mpeg");
-  res.setHeader("Cache-Control", "public, max-age=86400");
 
   const hit = ttsCache.get(key);
-  if (hit) return res.end(hit);
+  if (hit) {
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    return res.end(hit);
+  }
 
   try {
     const buf = TTS_PROVIDER === "google" ? await synthGoogle(text) : await synthEleven(text);
@@ -90,10 +95,15 @@ app.get("/api/tts", async (req, res) => {
       const oldest = ttsCache.keys().next().value as string | undefined;
       if (oldest) ttsCache.delete(oldest);
     }
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    console.log(`tts ok (${TTS_PROVIDER}) ${buf.length}b "${text.slice(0, 48)}"`);
     res.end(buf);
-  } catch (e) {
-    console.error("tts failed", e);
-    res.status(502).send("tts failed");
+  } catch (e: any) {
+    // Never cache failures — a transient error must not get stuck for 24h.
+    res.setHeader("Cache-Control", "no-store");
+    console.error(`tts failed (${TTS_PROVIDER}):`, e?.message || e);
+    res.status(502).type("text/plain").send(`tts failed: ${e?.message || e}`);
   }
 });
 
