@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Room } from "colyseus.js";
 import { QRCodeSVG } from "qrcode.react";
 import { createDisplay, joinByCode, reconnect, snapshot, Snap, PlayerSnap, Settings } from "./net";
-import { speak, stopSpeaking } from "./speech";
+import { narrate, stopNarration, primeNarration, testNarration, initNarration, narrationMode, speechStatus } from "./narrator";
 import Atmosphere from "./Atmosphere";
 import { Crest } from "./Crest";
 import { RoleArt } from "./RoleArt";
@@ -20,6 +20,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [choice, setChoice] = useState<string | null>(null);
   const [voiceOn, setVoiceOn] = useState(true);
+  const [ttsWarn, setTtsWarn] = useState(false);
 
   const roomRef = useRef<Room | null>(null);
   const lastSpoken = useRef("");
@@ -86,13 +87,20 @@ export default function App() {
     if (mode !== "display" || !snap || !voiceOn) return;
     if (snap.phase !== "lobby" && snap.narration !== lastSpoken.current) {
       lastSpoken.current = snap.narration;
-      speak(snap.narration);
+      narrate(snap.narration);
     }
   }, [snap, mode, voiceOn]);
 
   // ---- actions ----
   async function openDisplay() {
-    try { const room = await createDisplay(); attach(room, true); setMode("display"); }
+    primeNarration(); // the click is a valid gesture to unlock audio on strict browsers
+    try {
+      const room = await createDisplay(); attach(room, true); setMode("display");
+      const server = await initNarration();
+      // Only warn if neither server audio nor a browser voice is available.
+      if (server) setTtsWarn(false);
+      else setTimeout(() => setTtsWarn(speechStatus() !== "ok"), 1500);
+    }
     catch { setError("Could not open a room. Is the server running?"); }
   }
   async function doJoin() {
@@ -103,13 +111,13 @@ export default function App() {
   function send(type: string, payload?: any) { roomRef.current?.send(type, payload); }
   function leave() {
     try { localStorage.removeItem("mm"); } catch {}
-    stopSpeaking();
+    stopNarration();
     roomRef.current?.leave(true);
     roomRef.current = null;
     setSnap(null); setYou(null); setMode("home"); setError(""); setChoice(null);
   }
   function toggleVoice() {
-    setVoiceOn((v) => { if (v) stopSpeaking(); else lastSpoken.current = ""; return !v; });
+    setVoiceOn((v) => { if (v) stopNarration(); else { primeNarration(); lastSpoken.current = ""; } return !v; });
   }
   function simulate() {
     send("simulate", { count: 7 });
@@ -167,6 +175,12 @@ export default function App() {
   if (mode === "display") {
     return (
       <Shell>
+        {ttsWarn && (
+          <div className="notice">
+            <b>No voice on this screen.</b> This TV’s browser can’t do spoken narration — but the story always appears on screen below, so the game plays fine. For a narrator voice, cast a Chrome tab to the TV or open <b>{window.location.host}</b> on a laptop/phone and use that as the display.
+            <button className="btn ghost sm" onClick={() => setTtsWarn(false)}>Dismiss</button>
+          </div>
+        )}
         {snap.phase === "lobby" ? (
           <div className="card center">
             <div className="qr"><QRCodeSVG value={joinUrl} size={210} /></div>
@@ -178,6 +192,7 @@ export default function App() {
             <div className="bar center">
               <button className="btn solid" disabled={snap.players.length < snap.settings.minPlayers} onClick={() => send("start")}>Start game</button>
               <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button>
+              <button className="btn ghost" onClick={testNarration}>🔊 Test voice</button>
             </div>
             <div className="bar center">
               <button className="btn ghost" onClick={simulate}>▶ Simulate a game</button>
@@ -207,7 +222,7 @@ export default function App() {
                 {snap.phase === "night_result" || snap.phase === "day_result"
                   ? <button className="btn solid" onClick={() => send("continue")}>Continue →</button>
                   : <button className="btn ghost" onClick={() => send("force")}>⏭ Skip ahead</button>}
-                <button className="btn ghost" onClick={() => speak(snap.narration)}>🔁 Replay</button>
+                <button className="btn ghost" onClick={() => narrate(snap.narration)}>🔁 Replay</button>
                 <button className="btn ghost" onClick={toggleVoice}>🔊 Voice {voiceOn ? "on" : "off"}</button>
                 {snap.simulating && <button className="btn ghost" onClick={() => send("reset")}>■ Stop sim</button>}
               </div>

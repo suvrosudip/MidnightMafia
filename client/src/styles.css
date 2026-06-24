@@ -174,3 +174,8 @@ body[data-phase="day"] .stars { opacity:.12; }
 /* ---------------- simulate mode ---------------- */
 .simpill { font-family:var(--display); font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:var(--candle); border:1px solid var(--candle); border-radius:999px; padding:3px 10px; opacity:.85; }
 .botmark { font-family:var(--ui); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--sub); border:1px solid var(--line); border-radius:5px; padding:1px 5px; margin-left:6px; opacity:.7; }
+
+/* ---------------- tts notice ---------------- */
+.notice { background:rgba(192,65,75,.10); border:1px solid rgba(192,65,75,.4); border-radius:12px; padding:13px 15px; margin-bottom:14px; font-family:var(--ui); font-size:14px; line-height:1.5; color:var(--parchment); }
+.notice b { color:var(--candle); font-weight:600; }
+.btn.sm { padding:5px 11px; font-size:12px; margin-left:10px; margin-top:8px; }
